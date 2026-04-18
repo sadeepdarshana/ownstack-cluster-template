@@ -1,0 +1,34 @@
+def call(String applicationId) {
+    def values = values()
+
+    // Recreate the same tag used in dockerBuildAndPush to reference the just-built image
+    def sha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+    def branch = env.BRANCH_NAME ?: sh(script: 'git rev-parse --abbrev-ref HEAD', returnStdout: true).trim()
+    branch = branch.replaceAll('[^a-zA-Z0-9_.-]', '-')
+    def tag = "${branch}-${sha}"
+    def image_name_with_tag = "${values.imageRepositoryProject}/${applicationId}:${tag}"
+
+    container('helm') {
+        checkout scm
+        dir('./tmp-infrastructure'){
+            checkout([
+                $class: 'GitSCM',
+                branches: [[name: '*/main']],
+                userRemoteConfigs: [[
+                    url: env.COMMON_HELM_LIBRARY_GITHUB_REPO, // todo: add url to config if needed
+                    credentialsId: 'github-pat'
+                ]]
+            ])
+        }
+        sh "mkdir -p ./infrastructure/${applicationId}/helm/charts"
+        sh "cp -r ./tmp-infrastructure/common_helm_library ./infrastructure/${applicationId}/helm/charts/common_helm_library"
+
+        echo "Deploying helm chart"
+
+        sh """
+            helm upgrade ${applicationId} ./infrastructure/${applicationId}/helm --install --namespace prod \
+            --set image=\"${env.IMAGE_REGISTRY}/${image_name_with_tag}\" \
+            --set id=${applicationId}
+        """
+    }
+}
