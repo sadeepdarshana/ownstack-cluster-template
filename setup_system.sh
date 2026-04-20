@@ -20,6 +20,9 @@
 #   export jenkins_chart_version=5.8.79
 #   export jenkins_pipeline_library_repo=https://github.com/youruser/your-cluster.git
 #   export jenkins_pipeline_library_path=jenkins_pipeline_library
+#   export jenkins_github_org_folder_name="Repositories"     # optional, this is the default
+#   export jenkins_github_org_folder_repo_filter="*"         # optional, wildcard filter for repos to include
+#   export jenkins_jenkinsfile_path="infrastructure/Jenkinsfile"  # optional, path to Jenkinsfile inside each repo
 
 # Prerequisites
 # Make sure the SSH is setup from local machine to the VPS
