@@ -77,7 +77,8 @@ retry_command "helmfile sync"
 cd ..
 
 # Create the Cloudflare token secret for Traefik DNS challenge
-retry_command "kubectl create secret generic cloudflare-token --from-literal=token=$cloudflare_token -n traefik" # for DNS challenge
+retry_command 'kubectl create secret generic cloudflare-token --from-literal=token="$cloudflare_token" -n traefik \
+  --dry-run=client -o yaml | kubectl apply -f -' # for DNS challenge
 
 # Jenkins github PAT
 retry_command 'kubectl create secret generic github-pat --from-literal=username="$git_username" --from-literal=password="$github_pat" --namespace jenkins \
