@@ -194,34 +194,58 @@ XML
 )
 
 create_jenkins_org_folder() {
+  local cookiejar
+  cookiejar=$(mktemp)
+
   # Idempotency: skip if folder already exists
-  if curl -sf -u "admin:$jenkins_initial_password" "$jenkins_url/job/$encoded_folder_name/api/json" > /dev/null 2>&1; then
+  if curl -sf -c "$cookiejar" -b "$cookiejar" \
+    -u "admin:$jenkins_initial_password" \
+    "$jenkins_url/job/$encoded_folder_name/api/json" > /dev/null 2>&1; then
     echo "Jenkins org folder '$org_folder_name' already exists, skipping"
+    rm -f "$cookiejar"
     return 0
   fi
 
-  crumb_json=$(curl -sf -u "admin:$jenkins_initial_password" "$jenkins_url/crumbIssuer/api/json") || return 1
+  # Fetch crumb, reusing the same session cookie
+  local crumb_json crumb crumb_field
+  crumb_json=$(curl -sf -c "$cookiejar" -b "$cookiejar" \
+    -u "admin:$jenkins_initial_password" \
+    "$jenkins_url/crumbIssuer/api/json") || { rm -f "$cookiejar"; return 1; }
   crumb=$(echo "$crumb_json" | jq -r '.crumb')
   crumb_field=$(echo "$crumb_json" | jq -r '.crumbRequestField')
 
-  curl -sf -X POST "$jenkins_url/createItem?name=$encoded_folder_name" \
+  curl -sf -c "$cookiejar" -b "$cookiejar" \
+    -X POST "$jenkins_url/createItem?name=$encoded_folder_name" \
     -H "Content-Type: application/xml" \
     -H "$crumb_field: $crumb" \
     -u "admin:$jenkins_initial_password" \
-    --data-binary "$org_folder_xml" || return 1
+    --data-binary "$org_folder_xml"
+  local status=$?
+  rm -f "$cookiejar"
+  return $status
 }
 
 retry_command 'create_jenkins_org_folder'
 
 # Trigger initial repo scan
 scan_jenkins_org_folder() {
-  crumb_json=$(curl -sf -u "admin:$jenkins_initial_password" "$jenkins_url/crumbIssuer/api/json") || return 1
+  local cookiejar
+  cookiejar=$(mktemp)
+
+  local crumb_json crumb crumb_field
+  crumb_json=$(curl -sf -c "$cookiejar" -b "$cookiejar" \
+    -u "admin:$jenkins_initial_password" \
+    "$jenkins_url/crumbIssuer/api/json") || { rm -f "$cookiejar"; return 1; }
   crumb=$(echo "$crumb_json" | jq -r '.crumb')
   crumb_field=$(echo "$crumb_json" | jq -r '.crumbRequestField')
 
-  curl -sf -X POST "$jenkins_url/job/$encoded_folder_name/build" \
+  curl -sf -c "$cookiejar" -b "$cookiejar" \
+    -X POST "$jenkins_url/job/$encoded_folder_name/build" \
     -H "$crumb_field: $crumb" \
-    -u "admin:$jenkins_initial_password" || return 1
+    -u "admin:$jenkins_initial_password"
+  local status=$?
+  rm -f "$cookiejar"
+  return $status
 }
 
 retry_command 'scan_jenkins_org_folder'
