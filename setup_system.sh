@@ -1,8 +1,7 @@
 # All parameters must be provided as environment variables.
-# When run via Ownstack, these are injected by the backend.
+# When run via Ownstack, these are injected automatically.
 # For manual runs, export them before calling this script:
 #
-#   export vps=1.2.3.4
 #   export git_username=youruser
 #   export git_user_path=https://github.com/youruser
 #   export github_pat=ghp_...
@@ -20,18 +19,14 @@
 #   export jenkins_chart_version=5.8.79
 #   export jenkins_pipeline_library_repo=https://github.com/youruser/your-cluster.git
 #   export jenkins_pipeline_library_path=jenkins_pipeline_library
-#   export jenkins_github_org_folder_name="Repositories"     # optional, this is the default
-#   export jenkins_github_org_folder_repo_filter="*"         # optional, wildcard filter for repos to include
+#   export jenkins_github_org_folder_name="Repositories"          # optional, this is the default
+#   export jenkins_github_org_folder_repo_filter="*"              # optional, wildcard filter for repos to include
 #   export jenkins_jenkinsfile_path="infrastructure/Jenkinsfile"  # optional, path to Jenkinsfile inside each repo
+#
+# This script runs directly on the VPS. All prerequisites are installed automatically.
+# cloudflare is the DNS nameserver and proxy must be disabled for the subdomains.
+# github_pat created with permissions to create repos, list and clone.
 
-# Prerequisites
-# Make sure the SSH is setup from local machine to the VPS
-# curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/darwin/arm64/kubectl" # installs kubectl on local machine
-# brew install helm helmfile
-# cloudflare is the DNS nameserver and proxy is preferably disabled
-# github_pat created with permissions to list and clone repos
-
-# Script
 start_time=$(date +%s)
 echo "Start: $(date)"
 
@@ -45,31 +40,40 @@ retry_command() {
   done
 }
 
-# Logging in SSH and installing k3s
-ssh-keygen -R $vps
-retry_command "ssh -o StrictHostKeyChecking=accept-new root@$vps \"curl -sfL https://get.k3s.io | sh -s - --disable=traefik\""
-retry_command "scp root@$vps:/etc/rancher/k3s/k3s.yaml ~/.kube/config"
-retry_command "sed -i.bak \"s/127\.0\.0\.1/$vps/g\" ~/.kube/config" # replaces 127.0.0.1 with the public IP
+# Install k3s
+retry_command "curl -sfL https://get.k3s.io | sh -s - --disable=traefik"
 
-# Install Docker
-ssh root@$vps 'bash -s' << 'EOF'
+# Set up kubeconfig
+mkdir -p ~/.kube
+cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+chmod 600 ~/.kube/config
+
+# Install Docker and base packages
 export DEBIAN_FRONTEND=noninteractive
 for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
- apt-get remove -y --force-yes $pkg
+  apt-get remove -y --force-yes $pkg
 done
 apt-get update
-apt-get install -y --force-yes ca-certificates curl
+apt-get install -y --force-yes ca-certificates curl git jq
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
- -o /etc/apt/keyrings/docker.asc
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 chmod a+r /etc/apt/keyrings/docker.asc
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo \"${UBUNTU_CODENAME:-$VERSION_CODENAME}\") stable" \
-| tee /etc/apt/sources.list.d/docker.list > /dev/null
+. /etc/os-release
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME:-$VERSION_CODENAME} stable" \
+  | tee /etc/apt/sources.list.d/docker.list > /dev/null
 apt-get update
 apt-get install -y --force-yes docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-EOF
+
+# Install Helm
+retry_command "curl -sfL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
+
+# Install Helmfile
+HELMFILE_VERSION=0.171.0
+retry_command "curl -sSL \"https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz\" | tar -xz -C /usr/local/bin helmfile"
+
+# Install yq
+YQ_VERSION=4.44.2
+retry_command "curl -sSL \"https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64\" -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq"
 
 # Deploy the system using Helmfile
 cd ./system
@@ -78,7 +82,7 @@ cd ..
 
 # Create the Cloudflare token secret for Traefik DNS challenge
 retry_command 'kubectl create secret generic cloudflare-token --from-literal=token="$cloudflare_token" -n traefik \
-  --dry-run=client -o yaml | kubectl apply -f -' # for DNS challenge
+  --dry-run=client -o yaml | kubectl apply -f -'
 
 # Jenkins github PAT
 retry_command 'kubectl create secret generic github-pat --from-literal=username="$git_username" --from-literal=password="$github_pat" --namespace jenkins \
